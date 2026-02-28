@@ -590,6 +590,9 @@ export const dict = {
   "common.close": "Close",
   "common.edit": "Edit",
   "common.loadMore": "Load more",
+  "common.changelog": "Changelog",
+  "common.noReleasesFound": "No releases found",
+  "changelog.tag.latest": "Latest",
   "common.key.esc": "ESC",
 
   "common.time.justNow": "Just now",
