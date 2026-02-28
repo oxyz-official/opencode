@@ -15,7 +15,7 @@ export function DialogChangelog() {
   const [error, setError] = createSignal<string | undefined>(undefined)
 
   async function loadReleases() {
-    const result = await fetchReleases(platform)
+    const result = await fetchReleases(platform, language.t)
       .then((r) => ({ releases: r.releases, error: undefined }))
       .catch((e) => ({ releases: [], error: e instanceof Error ? e.message : "Failed to load changelog" }))
 

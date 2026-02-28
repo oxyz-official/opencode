@@ -4,7 +4,7 @@ type TimeKey =
   | "common.time.hoursAgo.short"
   | "common.time.daysAgo.short"
 
-type Translate = (key: TimeKey, params?: Record<string, string | number>) => string
+export type Translate = (key: TimeKey, params?: Record<string, string | number>) => string
 
 export function getRelativeTime(dateString: string, t: Translate): string {
   const date = new Date(dateString)

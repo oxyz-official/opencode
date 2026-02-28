@@ -1,5 +1,5 @@
 import type { Platform } from "@/context/platform"
-import { getRelativeTime } from "@/utils/time"
+import { getRelativeTime, Translate } from "@/utils/time"
 
 const REPO = "anomalyco/opencode"
 const GITHUB_API_URL = `https://api.github.com/repos/${REPO}/releases`
@@ -22,7 +22,7 @@ function saveCache(data: { releases: Release[]; timestamp: number }) {
   localStorage.setItem(CACHE_KEY, JSON.stringify(data))
 }
 
-export async function fetchReleases(platform: Platform): Promise<{ releases: Release[] }> {
+export async function fetchReleases(platform: Platform, t: Translate): Promise<{ releases: Release[] }> {
   const now = Date.now()
   const cached = loadCache()
 
@@ -40,7 +40,7 @@ export async function fetchReleases(platform: Platform): Promise<{ releases: Rel
     body: (r.body ?? "")
       .replace(/#(\d+)/g, (_: string, id: string) => `[#${id}](https://github.com/anomalyco/opencode/pull/${id})`)
       .replace(/@([a-zA-Z0-9_-]+)/g, (_: string, u: string) => `[@${u}](https://github.com/${u})`),
-    date: r.published_at ? getRelativeTime(r.published_at) : "",
+    date: r.published_at ? getRelativeTime(r.published_at, t) : "",
   }))
 
   saveCache({ releases, timestamp: now })
