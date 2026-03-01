@@ -183,8 +183,8 @@ console.log("\n=== plugin ===\n")
   if (scope) {
     pkg.name = `@${scope}/opencode-plugin`
     if (pkg.dependencies?.["@opencode-ai/sdk"]) {
-      pkg.dependencies[`@${scope}/opencode-sdk`] = pkg.dependencies["@opencode-ai/sdk"]
       delete pkg.dependencies["@opencode-ai/sdk"]
+      pkg.dependencies[`@${scope}/opencode-sdk`] = Script.version
     }
   }
 
