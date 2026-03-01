@@ -134,14 +134,71 @@ console.log("\n=== cli ===\n")
 }
 
 // ---------- 4. Publish SDK ----------
-// (same as upstream script/publish.ts line 79)
+// Inlined from packages/sdk/js/script/publish.ts to control scoped name.
+// Upstream uses @opencode-ai/sdk; fork publishes as @scope/opencode-sdk.
 console.log("\n=== sdk ===\n")
-await import(`../packages/sdk/js/script/publish.ts`)
+{
+  const sdkDir = fileURLToPath(new URL("../packages/sdk/js", import.meta.url))
+  process.chdir(sdkDir)
+
+  const pkg = await Bun.file("package.json").json()
+  const original = JSON.parse(JSON.stringify(pkg))
+
+  if (scope) {
+    pkg.name = `@${scope}/opencode-sdk`
+  }
+
+  function transformExports(exports: Record<string, string | object>) {
+    for (const [key, value] of Object.entries(exports)) {
+      if (typeof value === "object" && value !== null) {
+        transformExports(value as Record<string, string | object>)
+      } else if (typeof value === "string") {
+        const file = value.replace("./src/", "./dist/").replace(".ts", "")
+        exports[key] = {
+          import: file + ".js",
+          types: file + ".d.ts",
+        }
+      }
+    }
+  }
+  transformExports(pkg.exports)
+  await Bun.write("package.json", JSON.stringify(pkg, null, 2))
+  await $`bun pm pack`
+  await $`npm publish *.tgz --tag ${Script.channel} --access public`
+  await Bun.write("package.json", JSON.stringify(original, null, 2))
+}
 
 // ---------- 5. Publish Plugin ----------
-// (same as upstream script/publish.ts line 82)
+// Inlined from packages/plugin/script/publish.ts to control scoped name.
+// Upstream uses @opencode-ai/plugin; fork publishes as @scope/opencode-plugin.
 console.log("\n=== plugin ===\n")
-await import(`../packages/plugin/script/publish.ts`)
+{
+  const pluginDir = fileURLToPath(new URL("../packages/plugin", import.meta.url))
+  process.chdir(pluginDir)
 
-const dir = fileURLToPath(new URL("..", import.meta.url))
-process.chdir(dir)
+  await $`bun tsc`
+  const pkg = await Bun.file("package.json").json()
+  const original = JSON.parse(JSON.stringify(pkg))
+
+  if (scope) {
+    pkg.name = `@${scope}/opencode-plugin`
+    if (pkg.dependencies?.["@opencode-ai/sdk"]) {
+      pkg.dependencies[`@${scope}/opencode-sdk`] = pkg.dependencies["@opencode-ai/sdk"]
+      delete pkg.dependencies["@opencode-ai/sdk"]
+    }
+  }
+
+  for (const [key, value] of Object.entries(pkg.exports)) {
+    const file = (value as string).replace("./src/", "./dist/").replace(".ts", "")
+    pkg.exports[key] = {
+      import: file + ".js",
+      types: file + ".d.ts",
+    }
+  }
+  await Bun.write("package.json", JSON.stringify(pkg, null, 2))
+  await $`bun pm pack && npm publish *.tgz --tag ${Script.channel} --access public`
+  await Bun.write("package.json", JSON.stringify(original, null, 2))
+}
+
+const rootDir = fileURLToPath(new URL("..", import.meta.url))
+process.chdir(rootDir)
