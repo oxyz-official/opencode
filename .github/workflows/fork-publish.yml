@@ -17,6 +17,11 @@ on:
           - latest
           - dev
           - beta
+      npm_scope:
+        description: "npm scope for packages (e.g. ofoundation). Leave empty to use original names."
+        required: false
+        default: ""
+        type: string
       create_release:
         description: "Create a GitHub release with binary downloads"
         required: false
@@ -52,16 +57,18 @@ jobs:
 
       - run: bun install
 
-      - name: Determine version
+      - name: Determine version and scope
         id: meta
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
             echo "channel=${{ inputs.channel }}" >> "$GITHUB_OUTPUT"
+            echo "scope=${{ inputs.npm_scope }}" >> "$GITHUB_OUTPUT"
           else
             TIMESTAMP=$(date -u +%Y%m%d%H%M)
             echo "version=0.0.0-dev-${TIMESTAMP}" >> "$GITHUB_OUTPUT"
             echo "channel=dev" >> "$GITHUB_OUTPUT"
+            echo "scope=${{ vars.NPM_SCOPE || '' }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build CLI binaries for all platforms
@@ -79,6 +86,7 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }}
       channel: ${{ steps.meta.outputs.channel }}
+      scope: ${{ steps.meta.outputs.scope }}
 
   publish:
     needs: build
@@ -94,6 +102,16 @@ jobs:
         with:
           node-version: "24"
           registry-url: ${{ vars.NPM_REGISTRY_URL || 'https://registry.npmjs.org' }}
+
+      - name: Configure npm auth
+        run: |
+          REGISTRY_URL="${NPM_REGISTRY:-https://registry.npmjs.org}"
+          REGISTRY_HOST=$(echo "$REGISTRY_URL" | sed 's|https\?://||')
+          echo "//${REGISTRY_HOST}/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+          npm whoami --registry "$REGISTRY_URL"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_REGISTRY: ${{ vars.NPM_REGISTRY_URL }}
 
       - uses: actions/cache@v4
         with:
