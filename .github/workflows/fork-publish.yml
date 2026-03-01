@@ -1,19 +1,30 @@
 name: fork-publish
-run-name: "publish ${{ inputs.version || 'dev snapshot' }}"
+run-name: "${{ inputs.bump && format('release {0}', inputs.bump) || inputs.version && format('publish {0}', inputs.version) || 'dev snapshot' }}"
 
 on:
   workflow_dispatch:
     inputs:
+      bump:
+        description: "Auto-increment from latest published version"
+        required: false
+        type: choice
+        default: ""
+        options:
+          - ""
+          - patch
+          - minor
+          - major
       version:
-        description: "Version to publish (e.g. 1.3.0)"
-        required: true
+        description: "Exact version override (takes priority over bump)"
+        required: false
         type: string
       channel:
-        description: "npm dist-tag"
+        description: "npm dist-tag (defaults to 'latest' for releases, 'dev' for push)"
         required: false
-        default: "latest"
+        default: ""
         type: choice
         options:
+          - ""
           - latest
           - dev
           - beta
@@ -25,10 +36,6 @@ on:
   push:
     branches:
       - dev
-
-# Change this to your npm org name (without the @)
-env:
-  NPM_SCOPE: ofoundation
 
 permissions:
   contents: write
@@ -46,17 +53,51 @@ jobs:
 
       - uses: ./.github/actions/setup-bun
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: ${{ vars.NPM_REGISTRY_URL || 'https://registry.npmjs.org' }}
+
       - name: Determine version
         id: meta
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-            echo "channel=${{ inputs.channel }}" >> "$GITHUB_OUTPUT"
+          SCOPE="${{ vars.NPM_SCOPE || 'ofoundation' }}"
+          REGISTRY="${{ vars.NPM_REGISTRY_URL || 'https://registry.npmjs.org' }}"
+          PKG="@${SCOPE}/opencode"
+
+          if [ -n "${{ inputs.version }}" ]; then
+            # Explicit version override
+            VERSION="${{ inputs.version }}"
+            CHANNEL="${{ inputs.channel || 'latest' }}"
+            echo "mode=explicit" >> "$GITHUB_OUTPUT"
+
+          elif [ -n "${{ inputs.bump }}" ]; then
+            # Auto-increment from latest published version
+            CURRENT=$(npm view "$PKG" dist-tags.latest --registry "$REGISTRY" 2>/dev/null || echo "0.0.0")
+            echo "current published version: $CURRENT"
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+            case "${{ inputs.bump }}" in
+              major) VERSION="$((MAJOR + 1)).0.0" ;;
+              minor) VERSION="${MAJOR}.$((MINOR + 1)).0" ;;
+              *)     VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+            esac
+            CHANNEL="${{ inputs.channel || 'latest' }}"
+            echo "mode=bump (${{ inputs.bump }}): $CURRENT -> $VERSION" >> "$GITHUB_OUTPUT"
+
           else
+            # Push to dev — timestamp snapshot
             TIMESTAMP=$(date -u +%Y%m%d%H%M)
-            echo "version=0.0.0-dev-${TIMESTAMP}" >> "$GITHUB_OUTPUT"
-            echo "channel=dev" >> "$GITHUB_OUTPUT"
+            VERSION="0.0.0-dev-${TIMESTAMP}"
+            CHANNEL="dev"
+            echo "mode=snapshot" >> "$GITHUB_OUTPUT"
           fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
+          echo "--- resolved ---"
+          echo "version: ${VERSION}"
+          echo "channel: ${CHANNEL}"
 
       - name: Build CLI binaries for all platforms
         run: ./packages/opencode/script/build.ts
@@ -86,7 +127,6 @@ jobs:
         with:
           node-version: "24"
           registry-url: ${{ vars.NPM_REGISTRY_URL || 'https://registry.npmjs.org' }}
-          scope: "@${{ env.NPM_SCOPE }}"
 
       - uses: actions/download-artifact@v4
         with:
@@ -104,7 +144,7 @@ jobs:
           OPENCODE_CHANNEL: ${{ needs.build.outputs.channel }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: false
-          NPM_SCOPE: ${{ env.NPM_SCOPE }}
+          OPENCODE_NPM_SCOPE: ${{ vars.NPM_SCOPE || 'ofoundation' }}
 
       - name: Create release archives
         if: inputs.create_release

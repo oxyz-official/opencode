@@ -2,16 +2,18 @@
 
 // Fork-specific publish script.
 // Mirrors upstream script/publish.ts but skips Docker, AUR, and Homebrew,
-// and optionally scopes all package names under NPM_SCOPE.
+// and scopes all package names under OPENCODE_NPM_SCOPE (e.g. @ofoundation).
+//
+// Source files (build.ts, bin/opencode, postinstall.mjs) are NOT modified to
+// avoid merge conflicts on upstream sync. Instead, this script patches names
+// in the dist copies at publish time.
 
 import { Script } from "@opencode-ai/script"
 import { $ } from "bun"
 import { fileURLToPath } from "url"
-import path from "path"
 
-const rootDir = fileURLToPath(new URL("..", import.meta.url))
-const scope = process.env.NPM_SCOPE?.replace(/^@/, "") || ""
-const prefix = scope ? `@${scope}/` : ""
+const scope = process.env.OPENCODE_NPM_SCOPE || ""
+const scopePrefix = scope ? `@${scope}/` : ""
 
 console.log("=== fork publish ===\n")
 console.log("version:", Script.version)
@@ -40,9 +42,10 @@ await $`bun install`
 // (same as upstream script/publish.ts line 58)
 await import(`../packages/sdk/js/script/build.ts`)
 
-// ---------- 3. Publish CLI (npm only) ----------
+// ---------- 3. Publish CLI (npm only, scoped) ----------
 // Replicates packages/opencode/script/publish.ts lines 1-50,
 // skipping Docker (line 52-56), AUR (lines 59-114), and Homebrew (lines 116-181).
+// Adds npm scope to all package names.
 console.log("\n=== cli ===\n")
 {
   const cliDir = fileURLToPath(new URL("../packages/opencode", import.meta.url))
@@ -50,43 +53,48 @@ console.log("\n=== cli ===\n")
 
   const pkg = await import("../packages/opencode/package.json").then((m) => m.default)
 
-  // Collect binaries from build output and optionally rewrite names
   const binaries: Record<string, string> = {}
   for (const filepath of new Bun.Glob("*/package.json").scanSync({ cwd: "./dist" })) {
     const p = await Bun.file(`./dist/${filepath}`).json()
-    if (prefix) {
-      p.name = prefix + p.name
-      await Bun.file(`./dist/${filepath}`).write(JSON.stringify(p, null, 2))
-    }
-    binaries[p.name] = p.version
+    const scoped = `${scopePrefix}${p.name}`
+    p.name = scoped
+    await Bun.file(`./dist/${filepath}`).write(JSON.stringify(p, null, 2))
+    binaries[scoped] = p.version
+    console.log(`scoped: ${filepath} -> ${scoped}`)
   }
   console.log("binaries", binaries)
   const version = Object.values(binaries)[0]
 
   // Build wrapper package
-  const wrapperName = prefix ? `${prefix}opencode` : `${pkg.name}-ai`
+  const wrapperName = scope ? `@${scope}/opencode` : `${pkg.name}-ai`
   await $`mkdir -p ./dist/${pkg.name}`
   await $`cp -r ./bin ./dist/${pkg.name}/bin`
   await $`cp ./script/postinstall.mjs ./dist/${pkg.name}/postinstall.mjs`
   await Bun.file(`./dist/${pkg.name}/LICENSE`).write(await Bun.file("../../LICENSE").text())
 
-  // Rewrite bin/opencode to resolve scoped package names
-  if (prefix) {
-    const binPath = `./dist/${pkg.name}/bin/opencode`
-    let bin = await Bun.file(binPath).text()
+  // Patch the copied bin/opencode to resolve scoped package names
+  if (scope) {
+    const binScript = `./dist/${pkg.name}/bin/${pkg.name}`
+    let bin = await Bun.file(binScript).text()
+    // bin/opencode line 53: const base = "opencode-" + platform + "-" + arch
     bin = bin.replace(
-      '"opencode-" + platform + "-" + arch',
-      `"${prefix}opencode-" + platform + "-" + arch`,
+      `const base = "opencode-" + platform + "-" + arch`,
+      `const base = "${scopePrefix}opencode-" + platform + "-" + arch`,
     )
-    await Bun.file(binPath).write(bin)
+    // bin/opencode line 52: const packageName = \`opencode-\${platform}-\${arch}\`
+    // (postinstall.mjs uses the same pattern but is a separate file)
+    await Bun.file(binScript).write(bin)
+    console.log(`patched: ${binScript}`)
 
-    const postinstallPath = `./dist/${pkg.name}/postinstall.mjs`
-    let postinstall = await Bun.file(postinstallPath).text()
-    postinstall = postinstall.replace(
-      "opencode-${platform}-${arch}",
-      `${prefix}opencode-\${platform}-\${arch}`,
+    // Patch the copied postinstall.mjs to resolve scoped package names
+    const postinstall = `./dist/${pkg.name}/postinstall.mjs`
+    let pi = await Bun.file(postinstall).text()
+    pi = pi.replace(
+      "const packageName = `opencode-${platform}-${arch}`",
+      `const packageName = \`${scopePrefix}opencode-\${platform}-\${arch}\``,
     )
-    await Bun.file(postinstallPath).write(postinstall)
+    await Bun.file(postinstall).write(pi)
+    console.log(`patched: ${postinstall}`)
   }
 
   await Bun.file(`./dist/${pkg.name}/package.json`).write(
@@ -108,14 +116,16 @@ console.log("\n=== cli ===\n")
     ),
   )
 
-  // Publish all binary packages in parallel (same as upstream)
-  const tasks = Object.entries(binaries).map(async ([name]) => {
-    const dir = `./dist/${name.replace(prefix, "")}`
+  // Publish each binary package
+  // Binary dist dirs are still named opencode-* (build.ts output), but
+  // their package.json name is now @scope/opencode-*
+  const dirs = Object.keys(binaries).map((scoped) => scoped.replace(scopePrefix, ""))
+  const tasks = dirs.map(async (dir) => {
     if (process.platform !== "win32") {
-      await $`chmod -R 755 .`.cwd(dir)
+      await $`chmod -R 755 .`.cwd(`./dist/${dir}`)
     }
-    await $`bun pm pack`.cwd(dir)
-    await $`npm publish *.tgz --access public --tag ${Script.channel}`.cwd(dir)
+    await $`bun pm pack`.cwd(`./dist/${dir}`)
+    await $`npm publish *.tgz --access public --tag ${Script.channel}`.cwd(`./dist/${dir}`)
   })
   await Promise.all(tasks)
 
@@ -123,30 +133,15 @@ console.log("\n=== cli ===\n")
   await $`cd ./dist/${pkg.name} && bun pm pack && npm publish *.tgz --access public --tag ${Script.channel}`
 }
 
-// ---------- 4. Scope SDK name before publishing ----------
-if (prefix) {
-  const sdkPkgPath = path.resolve(rootDir, "packages/sdk/js/package.json")
-  const sdkPkg = await Bun.file(sdkPkgPath).json()
-  sdkPkg.name = `${prefix}opencode-sdk`
-  await Bun.file(sdkPkgPath).write(JSON.stringify(sdkPkg, null, 2))
-}
-
+// ---------- 4. Publish SDK ----------
+// (same as upstream script/publish.ts line 79)
 console.log("\n=== sdk ===\n")
 await import(`../packages/sdk/js/script/publish.ts`)
 
-// ---------- 5. Scope Plugin name and deps before publishing ----------
-if (prefix) {
-  const pluginPkgPath = path.resolve(rootDir, "packages/plugin/package.json")
-  const pluginPkg = await Bun.file(pluginPkgPath).json()
-  pluginPkg.name = `${prefix}opencode-plugin`
-  if (pluginPkg.dependencies?.["@opencode-ai/sdk"]) {
-    pluginPkg.dependencies[`${prefix}opencode-sdk`] = Script.version
-    delete pluginPkg.dependencies["@opencode-ai/sdk"]
-  }
-  await Bun.file(pluginPkgPath).write(JSON.stringify(pluginPkg, null, 2))
-}
-
+// ---------- 5. Publish Plugin ----------
+// (same as upstream script/publish.ts line 82)
 console.log("\n=== plugin ===\n")
 await import(`../packages/plugin/script/publish.ts`)
 
-process.chdir(rootDir)
+const dir = fileURLToPath(new URL("..", import.meta.url))
+process.chdir(dir)
