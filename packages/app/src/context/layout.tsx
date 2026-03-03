@@ -164,7 +164,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           opened: false,
           width: DEFAULT_PANEL_WIDTH,
           workspaces: {} as Record<string, boolean>,
-          workspacesDefault: false,
+          workspacesDefault: true,
         },
         terminal: {
           height: DEFAULT_TERMINAL_HEIGHT,
