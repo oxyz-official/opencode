@@ -73,9 +73,12 @@ jobs:
 
           elif [ -n "${{ inputs.bump }}" ]; then
             # Auto-increment from latest published version
-            CURRENT=$(npm view "$PKG" dist-tags.latest --registry "$REGISTRY" 2>/dev/null || echo "0.0.0")
-            echo "current published version: $CURRENT"
+            RAW=$(npm view "$PKG" dist-tags.latest --registry "$REGISTRY" 2>/dev/null || true)
+            # Strip prerelease suffix (e.g. 1.2.3-beta.1 → 1.2.3) and default to 0.0.0
+            CURRENT=$(echo "${RAW:-0.0.0}" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' || echo "0.0.0")
+            echo "current published version: $CURRENT (raw: ${RAW:-empty})"
             IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+            MAJOR=${MAJOR:-0}; MINOR=${MINOR:-0}; PATCH=${PATCH:-0}
 
             case "${{ inputs.bump }}" in
               major) VERSION="$((MAJOR + 1)).0.0" ;;
